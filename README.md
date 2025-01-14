@@ -3,7 +3,7 @@
  
 Please use Visual Studio Code and install the Live Server extension to test the demo HTML file.
 
-The project was collaboratively developed by the group from the Advanced Course in Computer Graphics at Waseda University. 
+The project was collaboratively developed by the group from the Advanced Course in Computer Graphics class at Waseda University. 
 
 
 Thanks to all team members for their hard work and dedication. 
