@@ -6,6 +6,7 @@ Please use Visual Studio Code and install the Live Server extension and use the 
 The project was collaboratively developed by the group from the Advanced Course in Computer Graphics at Waseda University. 
 
 The team division of work is as follows:
+
 YU YUANYONG: Responsible for project idea conception, assisting with embedding the spaceship model into the background, functionality debugging, error fixing, and project testing.
 CHEN MEIZE: Responsible for spaceship model creation, starry background, and primary feature coding such as spaceship exhaust flames, meteors, and collision detection.
 Other members: Responsible for planet modeling and some details of the starry background(Milky Way background).
