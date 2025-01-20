@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>宇宙探索 WebGL 项目</title>
+    <title>Interstellar Expedition</title>
     <style>
         body { margin: 0; overflow: hidden; }
         #info {
@@ -18,184 +18,463 @@
     </style>
 </head>
 <body>
-    <!-- 引入 Three.js 库 -->
+    <div id="info">
+        <p>W/A/S/D to control</p>
+        <p>Shift to speed up</p>
+        </div>
+    <!-- Import Three.js library -->
     <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/build/three.min.js"></script>
-    <!-- 引入 OrbitControls（用于调试，可在完成后移除） -->
+    <!-- Import OrbitControls (for debugging, can remove when done) -->
     <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/loaders/GLTFLoader.js"></script>
-    <script src="./js/lib/sun.js"></script>
+    <!-- <script src="./js/lib/sun.js"></script> If not needed, please remove this line -->
     <script>
-        // 确保在 DOM 加载完成后执行代码
+        // ================== 1. Define meteor shaders ==================
+        const meteorVertexShader = `
+            varying vec2 vUv;
+            varying vec3 vNormal;
+            varying vec3 vPosition;
+    
+            void main() {
+                vUv = uv;
+                vNormal = normalize(normalMatrix * normal);
+                vPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `;
+    
+        const meteorFragmentShader = `
+            uniform vec3 lightPos;
+            uniform float time;
+    
+            varying vec2 vUv;
+            varying vec3 vNormal;
+            varying vec3 vPosition;
+    
+            // Random number generation function
+            float random(vec2 xy) {
+                return fract(sin(dot(xy, vec2(12.9898, 78.233))) * 43758.5453123);
+            }
+    
+            // 2D noise function
+            float noise(vec2 xy) {
+                vec2 i = floor(xy);
+                vec2 f = fract(xy);
+    
+                // Random values for the four corners
+                float a = random(i);
+                float b = random(i + vec2(1.0, 0.0));
+                float c = random(i + vec2(0.0, 1.0));
+                float d = random(i + vec2(1.0, 1.0));
+    
+                vec2 u = f * f * (3.0 - 2.0 * f);
+    
+                return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+            }
+    
+            // Fractal Brownian Motion (FBM)
+            float fbm(vec2 xy) {
+                float v = 0.0;
+                float a = 0.5;
+                vec2 shift = vec2(100.0);
+                // Rotation matrix to reduce axial bias
+                mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
+                for (int i = 0; i < 6; ++i) { // Reduced iteration count for performance
+                    v += a * noise(xy);
+                    xy = rot * xy * 2.0 + shift;
+                    a *= 0.5;
+                }
+                return v;
+            }
+    
+            void main() {
+                // Generate procedural roughness
+                float n = fbm(vUv * 10.0);
+    
+                // Dynamic color adjustment
+                vec3 baseColor = mix(vec3(0.2), vec3(0.8), n);
+    
+                // Calculate lighting
+                vec3 lightDir = normalize(lightPos - vPosition);
+                float diff = max(dot(vNormal, lightDir), 0.0);
+    
+                // Ambient light
+                vec3 ambient = vec3(0.1);
+    
+                // Final color
+                vec3 color = baseColor * (diff + ambient);
+    
+                gl_FragColor = vec4(color, 1.0);
+            }
+        `;
+    
+        // ================== 2. Create irregular meteor geometry and material ==================
+        /**
+         * Create an irregular meteor geometry by applying random perturbations to vertex positions.
+         * @param {THREE.BufferGeometry} baseGeometry - The base geometry.
+         * @returns {THREE.BufferGeometry} - The irregular geometry after perturbation.
+         */
+        function createIrregularMeteorGeometry(baseGeometry) {
+            const geometry = baseGeometry.clone();
+            const positionAttribute = geometry.attributes.position;
+            const vertex = new THREE.Vector3();
+    
+            for (let i = 0; i < positionAttribute.count; i++) {
+                vertex.fromBufferAttribute(positionAttribute, i);
+                // Apply a small random offset to each vertex to create an irregular shape
+                const displacement = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.5, // x-direction offset
+                    (Math.random() - 0.5) * 0.5, // y-direction offset
+                    (Math.random() - 0.5) * 0.5  // z-direction offset
+                );
+                vertex.add(displacement);
+                positionAttribute.setXYZ(i, vertex.x, vertex.y, vertex.z);
+            }
+            positionAttribute.needsUpdate = true;
+            geometry.computeVertexNormals();
+            return geometry;
+        }
+    
+        /**
+         * Create a meteor material using a custom shader.
+         * @param {THREE.Vector3} lightPosition - The position of the light source.
+         * @returns {THREE.ShaderMaterial} - The meteor material.
+         */
+        function createMeteorMaterial(lightPosition) {
+            const material = new THREE.ShaderMaterial({
+                vertexShader: meteorVertexShader,
+                fragmentShader: meteorFragmentShader,
+                uniforms: {
+                    lightPos: { value: lightPosition },
+                    time: { value: 0.0 }
+                },
+                transparent: false
+            });
+            return material;
+        }
+    
+        /**
+         * Create a meteor mesh using a custom shader material.
+         * @param {THREE.BufferGeometry} baseGeometry - The base geometry.
+         * @param {THREE.Vector3} lightPosition - The position of the light source.
+         * @returns {THREE.Mesh} - The meteor mesh.
+         */
+        function createMeteor(baseGeometry, lightPosition) {
+            const material = createMeteorMaterial(lightPosition);
+            const meteor = new THREE.Mesh(baseGeometry, material);
+            return meteor;
+        }
+    
+        // ================== 3. Add randomly distributed meteors of various shapes ==================
+        // Used to store meteor objects
+        const meteors = [];
+    
+        /**
+         * Add the specified number of meteors to the scene.
+         * @param {THREE.Scene} scene - Three.js scene.
+         * @param {number} count - Number of meteors.
+         * @param {THREE.Vector3} lightPosition - The position of the light source.
+         */
+        function addRandomMeteors(scene, count = 5000, lightPosition) {
+            const baseGeometry = new THREE.IcosahedronGeometry(0.0002, 2); // Base geometry, radius 0.0002, subdivision level 2
+    
+            for (let i = 0; i < count; i++) {
+                const geometry = createIrregularMeteorGeometry(baseGeometry);
+                const meteor = createMeteor(geometry, lightPosition);
+    
+                // Random position, e.g., in the range -5000 to 5000
+                function getValidCoordinate() {
+                    let value;
+                    do {
+                        value = (Math.random() - 0.5) * 1000;
+                    } while (Math.abs(value) < 300); // Avoid being too close to the center
+                    return value;
+                }
+    
+                meteor.position.set(
+                    getValidCoordinate(), // x
+                    getValidCoordinate(), // y
+                    getValidCoordinate()  // z
+                );
+    
+                // Random rotation
+                meteor.rotation.set(
+                    Math.random() * Math.PI,
+                    Math.random() * Math.PI,
+                    Math.random() * Math.PI
+                );
+    
+                // Random scale
+                const scale = 2 + Math.random() * 5; // Scale factor between 2 and 7
+                meteor.scale.set(scale, scale, scale);
+    
+                // Add velocity for dynamic movement
+                meteor.userData.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.05,
+                    (Math.random() - 0.5) * 0.05,
+                    (Math.random() - 0.5) * 0.05
+                );
+    
+                // Add to the scene and meteor array
+                scene.add(meteor);
+                meteors.push(meteor);
+            }
+        }
+    
+        // ================== 4. Debug function ==================
+        /**
+         * Check if the geometry's vertices have non-finite values.
+         * @param {THREE.BufferGeometry} geometry - The geometry.
+         * @param {string} name - The name of the geometry for debugging output.
+         */
+        function debugCheckNaN(geometry, name) {
+            const posAttr = geometry.getAttribute('position');
+            for (let i = 0; i < posAttr.count; i++) {
+                const x = posAttr.getX(i);
+                const y = posAttr.getY(i);
+                const z = posAttr.getZ(i);
+                if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+                    console.warn(`[${name}] Invalid vertex at index ${i}: (${x}, ${y}, ${z})`);
+                }
+            }
+        }
+    
+        // ================== 5. Collision detection related variables and functions ==================
+        // The spaceship's collision radius, can be adjusted as needed
+        const spaceshipCollisionRadius = 5;
+        // Globally declare the planets array
+        let planets = [];
+        // Contains all celestial bodies that require collision detection
+        let collisionObjects = [];
+    
+        /**
+         * Check if the spaceship has collided with any planet or the sun.
+         * @param {THREE.Vector3} spaceshipPosition - The position of the spaceship.
+         * @returns {boolean} - Returns true if a collision occurred, otherwise false.
+         */
+        function isColliding(spaceshipPosition) {
+            for (let body of collisionObjects) {
+                const bodyPosition = body.position;
+                const distance = spaceshipPosition.distanceTo(bodyPosition);
+                const collisionDistance = body.userData.collisionRadius + spaceshipCollisionRadius;
+                if (distance < collisionDistance) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    
+        // -----------------------------------------------------------------------
+        // Execute code after DOM is loaded
         window.addEventListener('DOMContentLoaded', () => {
-            // 初始化场景、相机和渲染器
+            // Initialize scene, camera, and renderer
             const scene = new THREE.Scene();
-
-            // 设置相机（透视相机）
             const camera = new THREE.PerspectiveCamera(
-                75, window.innerWidth / window.innerHeight, 0.1, 1000
+                75, window.innerWidth / window.innerHeight, 0.1, 10000
             );
-            camera.position.set(0, 50, 100); // 调整相机位置到更远的地方
-
-            // 初始化渲染器
+            camera.position.set(0, 50, 100);
+    
             const renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
-
-            // 添加星空背景
+    
+            // ------------- Starry Sky -------------
             const starsGeometry = new THREE.BufferGeometry();
             const starsCount = 10000;
+    
             const positions = [];
             for (let i = 0; i < starsCount; i++) {
-                const x = (Math.random() - 0.5) * 2000;
-                const y = (Math.random() - 0.5) * 2000;
-                const z = (Math.random() - 0.5) * 2000;
+                const x = (Math.random() - 0.5) * 10000;
+                const y = (Math.random() - 0.5) * 10000;
+                const z = (Math.random() - 0.5) * 10000;
                 positions.push(x, y, z);
             }
             starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-            const starsMaterial = new THREE.PointsMaterial({ color: 0xffffff });
+    
+            // Modify the starfield material so it always remains in the background
+            const starsMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.5 });
+            starsMaterial.depthTest = false;    // Disable depth test
+            starsMaterial.depthWrite = false;   // Disable depth write
             const starField = new THREE.Points(starsGeometry, starsMaterial);
+            starField.renderOrder = -2;         // Set render order so it renders first
             scene.add(starField);
-
-
-            
-            // create asterism
-            function createAsterism(dsitanceX, dsitanceY, dsitanceZ) {
-                const pointLight = new THREE.PointLight(0xffffff, 1, 100);
-                pointLight.position.set(dsitanceX, dsitanceY, dsitanceZ);
-                scene.add(pointLight);
-
+    
+            // ------------- Some "nebulae" -------------
+            function createAsterism(distanceX, distanceY, distanceZ) {
                 const asterismGeometry = new THREE.BufferGeometry();
                 const asterismCount = 1500;
                 const asterismPositions = [];
                 const colors = [];
                 for (let i = 0; i < asterismCount; i++) {
-                    const x = (Math.random() - 0.5) * 300 * Math.random() + dsitanceX;
-                    const y = (Math.random() - 0.5) * 30 * Math.random() + dsitanceY;
-                    const z = (Math.random() - 0.5) * 40 * Math.random() + dsitanceZ;
+                    const x = (Math.random() - 0.5) * 3000 * Math.random() + distanceX;
+                    const y = (Math.random() - 0.5) * 300 * Math.random() + distanceY;
+                    const z = (Math.random() - 0.5) * 400 * Math.random() + distanceZ;
                     asterismPositions.push(x, y, z);
-                    const colorR = 0.5 + Math.random() * 0.5;  // 红色分量（弱）
-                    const colorG = 0.5;  // 绿色分量（弱）
-                    const colorB = 1.0;  // 蓝色分量（强）
+                    const colorR = 0.5 + Math.random() * 0.5; 
+                    const colorG = 0.5;  
+                    const colorB = 1.0;  
                     colors.push(colorR, colorG, colorB);
                 }
                 asterismGeometry.setAttribute('position', new THREE.Float32BufferAttribute(asterismPositions, 3));
                 asterismGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
                 const asterismMaterial = new THREE.PointsMaterial({
-                    size: 0.1,
+                    size: 1.0,
                     opacity: 0.6,
                     transparent: true,
                     vertexColors: true,
-                    blending: THREE.AdditiveBlending
+                    blending: THREE.NormalBlending,
+                    depthTest: true,
+                    depthWrite: true
                 });
                 const asterismField = new THREE.Points(asterismGeometry, asterismMaterial);
-
-                // --- 空间旋转 ---
-                asterismField.rotation.x = Math.PI / Math.random() * 2;
-                asterismField.rotation.y = Math.PI / Math.random() * 2;
-                asterismField.rotation.z = Math.PI / Math.random() * 2;
-
+                asterismField.renderOrder = -1;  // Render after the starfield
+    
+                // Prevent division by zero; ensure the random denominator is not zero
+                const randomFactor = Math.random() * 2 + 0.1; // +0.1 to avoid near-zero
+                asterismField.rotation.x = Math.PI / randomFactor;
+                asterismField.rotation.y = Math.PI / randomFactor;
+                asterismField.rotation.z = Math.PI / randomFactor;
+    
                 scene.add(asterismField);
             }
-
-
-            // 添加恒星
-            const sunGeometry = new THREE.SphereGeometry(10, 32, 32);
-            const texture = new THREE.TextureLoader().load("https://raw.githubusercontent.com/uemura5683/threejs_plactice/master/earth_vol2/img/sun.jpg");
-            const sunMaterial = new THREE.MeshBasicMaterial({ map: texture });
+    
+            // ------------- "Sun" -------------
+            const sunGeometry = new THREE.SphereGeometry(40, 64, 64);
+            const sunTexture = new THREE.TextureLoader().load(
+                "https://raw.githubusercontent.com/uemura5683/threejs_plactice/master/earth_vol2/img/sun.jpg",
+                undefined,
+                undefined,
+                (err) => {
+                    console.error('Failed to load sun texture: https://raw.githubusercontent.com/uemura5683/threejs_plactice/master/earth_vol2/img/sun.jpg', err);
+                }
+            );
+            const sunMaterial = new THREE.MeshBasicMaterial({ 
+                map: sunTexture,
+                transparent: false,
+                opacity: 1.0 
+            });
             const sun = new THREE.Mesh(sunGeometry, sunMaterial);
+            sun.userData = {
+                name: 'sun',
+                collisionRadius: 40 // Set the sun's collision radius
+            };
             scene.add(sun);
-
-            // 添加光源（使恒星发光）
-            const pointLight = new THREE.PointLight(0xffffff, 1, 1000);
+    
+            // Light source (simulate sunlight)
+            const pointLight = new THREE.PointLight(0xffffff, 2, 10000);
             pointLight.position.set(0, 0, 0);
             scene.add(pointLight);
-
-            function createPlanetWithTexture(planetData) {
-                const geometry = new THREE.SphereGeometry(planetData.radius, 32, 32);
+    
+            // ------------- Create planets & moon & comet etc. -------------
+            function createPlanetWithTexture(name, planetData) {
+                const geometry = new THREE.SphereGeometry(planetData.radius, 64, 64);
                 const textureLoader = new THREE.TextureLoader();
-                const texture = textureLoader.load(planetData.textureUrl);
-                const material = new THREE.MeshStandardMaterial({ map: texture });
+                const mapTex = textureLoader.load(
+                    planetData.textureUrl,
+                    undefined,
+                    undefined,
+                    (err) => {
+                        console.error(`Failed to load planet texture: ${planetData.textureUrl}`, err);
+                    }
+                );
+                const material = new THREE.MeshStandardMaterial({ 
+                    map: mapTex,
+                    transparent: false,
+                    opacity: 1.0
+                });
                 const planet = new THREE.Mesh(geometry, material);
-                planet.userData = { distance: planetData.distance, speed: planetData.speed, angle: Math.random() * Math.PI * 2 };
+                planet.userData = {
+                    name: name,
+                    distance: planetData.distance,
+                    speed: planetData.speed,
+                    angle: Math.random() * Math.PI * 2,
+                    collisionRadius: planetData.radius
+                };
                 planet.rotation.z = THREE.MathUtils.degToRad(planetData.tilt);
                 scene.add(planet);
                 return planet;
             }
-
-            function createPlanetWithRing(planetData) {
-                const planet = createPlanetWithTexture(planetData);
-                const ringGeometory = new THREE.TorusGeometry(planetData.radius * 1.5, 5, 2, 1000); // 扁平圆环参数
+    
+            function createPlanetWithRing(name, planetData) {
+                const planet = createPlanetWithTexture(name, planetData);
+                const ringGeometry = new THREE.RingGeometry(planetData.radius * 1.5, planetData.radius * 2.5, 64);
                 const textureLoader = new THREE.TextureLoader();
-                const ringTexture = textureLoader.load(planetData.ringTextureUrl);
+                const ringTexture = textureLoader.load(
+                    planetData.ringTextureUrl,
+                    undefined,
+                    undefined,
+                    (err) => {
+                        console.error(`Failed to load ring texture: ${planetData.ringTextureUrl}`, err);
+                    }
+                );
                 const ringMaterial = new THREE.MeshPhongMaterial({
                     map: ringTexture,
                     opacity: 0.7,
-                    transparent: true
+                    transparent: true,
+                    side: THREE.DoubleSide
                 });
-                const ring = new THREE.Mesh(ringGeometory, ringMaterial);
+                const ring = new THREE.Mesh(ringGeometry, ringMaterial);
                 ring.rotation.x = Math.PI / 2;
                 planet.add(ring);
                 planet.rotation.z = THREE.MathUtils.degToRad(planetData.tilt);
-
+    
                 return planet;
             }
-
+    
             function createMoon(earth, moonData) {
-                const moonGeometry = new THREE.SphereGeometry(moonData.radius, 32, 32);
-                const moonTexture = new THREE.TextureLoader().load(moonData.textureUrl);
-                const moonMaterial = new THREE.MeshStandardMaterial({ map: moonTexture });
-
-                // 创建月球网格
+                const moonGeometry = new THREE.SphereGeometry(moonData.radius, 64, 64);
+                const moonTexture = new THREE.TextureLoader().load(
+                    moonData.textureUrl,
+                    undefined,
+                    undefined,
+                    (err) => {
+                        console.error(`Failed to load moon texture: ${moonData.textureUrl}`, err);
+                    }
+                );
+                const moonMaterial = new THREE.MeshStandardMaterial({ 
+                    map: moonTexture,
+                    transparent: false,
+                    opacity: 1.0
+                });
                 const moon = new THREE.Mesh(moonGeometry, moonMaterial);
-
-                // 设置月球公转数据
                 moon.userData = {
-                    distance: moonData.distance, // 月球到地球的距离
-                    speed: moonData.speed,       // 公转速度
-                    angle: Math.random() * Math.PI * 2 // 公转起始角度
+                    distance: moonData.distance,
+                    speed: moonData.speed,
+                    angle: Math.random() * Math.PI * 2,
+                    collisionRadius: moonData.radius
                 };
-
-                // 计算初始位置
                 moon.position.set(
                     Math.cos(moon.userData.angle) * moon.userData.distance,
                     0,
                     Math.sin(moon.userData.angle) * moon.userData.distance
                 );
-
-                // 将月球添加到地球周围
                 earth.add(moon);
-
                 return moon;
             }
-
+    
             function createComet(cometData) {
                 const geometry = new THREE.SphereGeometry(cometData.radius, 16, 16);
                 const material = new THREE.MeshStandardMaterial({ color: cometData.color });
                 const comet = new THREE.Mesh(geometry, material);
-
+    
                 const tailPositions = [];
                 for (let i = 0; i < cometData.tailLength; i++) {
-                    tailPositions.push(0, 0, 0); // 初始位置设置为0
+                    tailPositions.push(new THREE.Vector3(0, 0, 0));
                 }
                 const tailGeometry = new THREE.BufferGeometry();
-                tailGeometry.setAttribute(
-                    'position',
-                    new THREE.Float32BufferAttribute(tailPositions, 3)
-                );
-
+                tailGeometry.setAttribute('position', new THREE.Float32BufferAttribute(tailPositions.flat(), 3));
                 const tailMaterial = new THREE.LineBasicMaterial({
                     color: cometData.color,
                     linewidth: 2,
                     transparent: true,
                     opacity: 0.7,
                 });
-
                 const tail = new THREE.Line(tailGeometry, tailMaterial);
-
+    
                 const cometGroup = new THREE.Group();
                 cometGroup.add(comet, tail);
                 scene.add(cometGroup);
-
+    
                 cometGroup.userData = {
                     speed: cometData.speed,
                     angle: cometData.initialAngle,
@@ -203,171 +482,234 @@
                     tailPositions,
                     tailGeometry,
                 };
-
                 return cometGroup;
             }
-
+    
             function updateComet(comet) {
                 const inclination = THREE.MathUtils.degToRad(30);
                 const eccentricity = 0.7;
                 const semiMajorAxis = 200;
-
                 comet.userData.angle += comet.userData.speed;
-
+    
                 const x = semiMajorAxis * Math.cos(comet.userData.angle);
                 const z = semiMajorAxis * Math.sqrt(1 - eccentricity ** 2) * Math.sin(comet.userData.angle);
-
                 const y = z * Math.sin(inclination);
+    
                 comet.position.set(x, y, z * Math.cos(inclination));
-
+    
                 const tailPositions = comet.userData.tailPositions || [];
                 const cometPosition = comet.position.clone();
-
                 tailPositions.unshift(cometPosition);
                 if (tailPositions.length > 30) tailPositions.pop();
-
+    
                 const positions = [];
                 for (const pos of tailPositions) {
                     positions.push(pos.x - comet.position.x, pos.y - comet.position.y, pos.z - comet.position.z);
                 }
-
-                comet.userData.tailGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-                comet.userData.tailGeometry.attributes.position.needsUpdate = true; // 更新通知
+                comet.userData.tailGeometry.setAttribute(
+                    'position', new THREE.BufferAttribute(new Float32Array(positions), 3)
+                );
+                comet.userData.tailGeometry.attributes.position.needsUpdate = true;
             }
-
-
-
-            // planet data
+    
+            const pa = 500;
+            // ------------------ Some planet data ------------------
             const planetData = {
-                mercury: {
-                    radius: 0.38,
-                    distance: 14,
-                    speed: 0.005,
-                    textureUrl: 'texture/mercury_tx.png',
-                    tilt: 0.03, // 倾斜
-                },
-                venus: {
-                    radius: 0.95,
-                    distance: 29,
-                    speed: 0.005,
-                    textureUrl: 'texture/venus_tx.png',
-                    tilt: 177.4, // 倾斜
-                },
-                earth: {
-                    radius: 1,
-                    distance: 40,
-                    speed: 0.005,
-                    textureUrl: 'texture/earth_tx.png',
-                    tilt: 23.4, // 倾斜
-                },
-                mars: {
-                    radius: 0.53,
-                    distance: 60,
-                    speed: 0.005,
-                    textureUrl: 'texture/mars_tx.png',
-                    tilt: 25.2, // 倾斜
-                },
-                jupiter: {
-                    radius: 10.97,
-                    distance: 100,
-                    speed: 0.003,
-                    textureUrl: 'texture/jupiter_tx.png',
-                    tilt: 3.1, // 倾斜
-                },
-                saturn: {
-                    radius: 9.13,
-                    distance: 150,
-                    speed: 0.002,
-                    textureUrl: 'texture/saturn_tx.png',
-                    ringTextureUrl: 'https://raw.githubusercontent.com/82mou/sandbox/master/universe/img/saturn-ring.jpg',
-                    tilt: 26.7, // 倾斜
-                },
-                uranus: {
-                    radius: 3.98,
-                    distance: 200,
-                    speed: 0.001,
-                    textureUrl: 'texture/uranus_tx.png',
-                    ringTextureUrl: 'https://raw.githubusercontent.com/82mou/sandbox/master/universe/img/ouranos-ring.jpg',
-                    tilt: 97.8, // 倾斜
-                },
-                neptune: {
-                    radius: 3.87,
-                    distance: 250,
-                    speed: 0.0009,
-                    textureUrl: 'texture/neptune_tx.png',
-                    tilt: 28.3, // 倾斜
-                },
+                mercury: { radius: 10.38 + 30, distance: 140 / 2 + pa,  speed: 0.005, textureUrl: 'texture/mercury_tx.png', tilt: 0.03 },
+                venus:   { radius: 10.95 + 30, distance: 290 / 2 + pa,  speed: 0.005, textureUrl: 'texture/venus_tx.png',   tilt: 177.4 },
+                earth:   { radius: 11 + 30,    distance: 400 / 2 + pa,  speed: 0.005, textureUrl: 'texture/earth_tx.png',   tilt: 23.4 },
+                mars:    { radius: 10.53 + 30, distance: 600 / 2 + pa,  speed: 0.005, textureUrl: 'texture/mars_tx.png',    tilt: 25.2 },
+                jupiter: { radius: 110.97 + 30, distance: 1000 / 2 + pa, speed: 0.003, textureUrl: 'texture/jupiter_tx.png', tilt: 3.1 },
+                saturn:  { radius: 19.13 + 30, distance: 1500 / 2 + pa, speed: 0.002, textureUrl: 'texture/saturn_tx.png',  ringTextureUrl: 'https://raw.githubusercontent.com/82mou/sandbox/master/universe/img/saturn-ring.jpg', tilt: 26.7 },
+                uranus:  { radius: 13.98 + 30, distance: 2000 / 2 + pa, speed: 0.001, textureUrl: 'texture/uranus_tx.png',  ringTextureUrl: 'https://raw.githubusercontent.com/82mou/sandbox/master/universe/img/ouranos-ring.jpg', tilt: 97.8 },
+                neptune: { radius: 13.87 + 30, distance: 2500 / 2 + pa, speed: 0.0009, textureUrl: 'texture/neptune_tx.png', tilt: 28.3 },
             };
-
-            // moon data
-            const moonData = {
-                radius: 0.27,
-                distance: 1.5,
-                speed: 0.01,
-                textureUrl: 'texture/moon_tx.png'
-            };
-
-            // comet data
+    
+            const moonData = { radius: 0.27, distance: 1.5, speed: 0.01, textureUrl: 'texture/moon_tx.png' };
+    
             const cometData = {
-                radius: 0.5,
-                color: 0xffffff,
-                speed: 0.002,
-                distance: 100,
-                startX: 20,
-                startY: 0,
-                startZ: 0,
-                tailLength: 15,
-                initialAngle: 0,
+                radius: 0.5,   color: 0xffffff, speed: 0.002, distance: 100,
+                startX: 20,    startY: 0,       startZ: 0,
+                tailLength: 15, initialAngle: 0,
             };
-
-            // 创建多个行星
-            const planets = [
-                createPlanetWithTexture(planetData.mercury),
-                createPlanetWithTexture(planetData.venus),
-                createPlanetWithTexture(planetData.earth),
-                createPlanetWithTexture(planetData.mars),
-                createPlanetWithTexture(planetData.jupiter),
-                createPlanetWithRing(planetData.saturn),
-                createPlanetWithRing(planetData.uranus),
-                createPlanetWithTexture(planetData.neptune),
+    
+            // Create planets
+            planets = [
+                createPlanetWithTexture('mercury', planetData.mercury),
+                createPlanetWithTexture('venus', planetData.venus),
+                createPlanetWithTexture('earth', planetData.earth),
+                createPlanetWithTexture('mars', planetData.mars),
+                createPlanetWithTexture('jupiter', planetData.jupiter),
+                createPlanetWithRing('saturn', planetData.saturn),
+                createPlanetWithRing('uranus', planetData.uranus),
+                createPlanetWithTexture('neptune', planetData.neptune),
             ];
-
-            // create moon
-            const moon = createMoon(planets[2], moonData); 
-
-            // create asterism
-            createAsterism(200, 0, -200);
-            createAsterism(200, 5, 500);
-            createAsterism(400, 5, 400);
-            createAsterism(-200, 0, 300);
-            createAsterism(-200, 0, -300);
-            createAsterism(-500, 0, 10);
-
-            // create comet
+    
+            // Create Earth's moon
+            const moon = createMoon(planets[2], moonData);
+    
+            // Create some "nebulae," placed further away
+            createAsterism(2000, 0, -2000);
+            createAsterism(2000, 5, 5000);
+            createAsterism(4000, 5, 4000);
+            createAsterism(-2000, 0, 3000);
+            createAsterism(-2000, 0, -3000);
+            createAsterism(-5000, 0, 100);
+    
+            // Create comet
             const comet = createComet(cometData);
-            let spaceship; // 声明全局变量
-            // 加载 glTF 模型
+    
+            // Create meteors
+            addRandomMeteors(scene, 5000, pointLight.position); // Add 5000 meteors and pass the light source position
+    
+            // Add planets and the sun to the collision detection array
+            collisionObjects = planets.concat(sun);
+    
+            // -------------- Load spaceship model + attach flame effect --------------
+            let spaceship;
+            // Two flame managers
+            let flameEffectLeft;
+            let flameEffectRight;
+    
+            /**
+             * Create a flame effect.
+             * @param {THREE.Scene} scene - The scene.
+             * @param {THREE.Object3D} spaceship - The spaceship object.
+             * @param {THREE.Vector3} position - The position of the flame relative to the spaceship.
+             * @returns {Object} - The flame effect object, containing spawn and update methods.
+             */
+            function createFlameEffect(scene, spaceship, enginePosition) {
+                // Class for a single flame cylinder
+                function FlameCylinder() {
+                    // CylinderGeometry( topRadius, bottomRadius, height, radialSegments, heightSegments, openEnded )
+                    const geometry = new THREE.CylinderGeometry(0.4, 0.8, 2, 32, 1, true);
+    
+                    // Add vertex colors to the geometry for a gradient from blue to yellow/red
+                    const colors = [];
+                    const vertexCount = geometry.attributes.position.count;
+                    for (let i = 0; i < vertexCount; i++) {
+                        const y = geometry.attributes.position.getY(i);
+                        const color = new THREE.Color(0xffffff);
+                        if (y < 0.5) {
+                            color.setHSL(0.6, 1.0, 0.5); // Blue
+                        } else if (y < 1.0) {
+                            color.setHSL(0.1, 1.0, 0.5); // Yellow
+                        } else {
+                            color.setHSL(0.0, 1.0, 0.5); // Red
+                        }
+                        colors.push(color.r, color.g, color.b);
+                    }
+                    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    
+                    const material = new THREE.MeshBasicMaterial({
+                        vertexColors: true,
+                        transparent: true,
+                        blending: THREE.AdditiveBlending,
+                        depthWrite: true,
+                        side: THREE.DoubleSide,
+                    });
+    
+                    this.mesh = new THREE.Mesh(geometry, material);
+    
+                    // Rotate cylinder so it extends along the Z axis (default is Y axis)
+                    this.mesh.rotation.x = -Math.PI / 2;
+    
+                    // Initial scale (length is 0, will gradually increase in update)
+                    this.mesh.scale.set(1, 0, 1);
+    
+                    // Animation properties
+                    // velocity means how much it moves along -Z in the local spaceship coordinate each frame
+                    this.velocity = new THREE.Vector3(0, 0, -1.5);
+                    this.maxScale = 1.0; 
+                    this.life = 0.1;    
+                    this.decay = 0.02;  
+                }
+    
+                // Update a single flame
+                FlameCylinder.prototype.update = function(delta) {
+                    // In local coordinates, translateZ moves along the mesh's local Z axis
+                    this.mesh.translateZ(this.velocity.z * delta);
+    
+                    // Gradually stretch along the flame axis (currently Y, because of -Math.PI/2 rotation)
+                    this.mesh.scale.y += 0.5 * delta;
+                    if (this.mesh.scale.y > this.maxScale) {
+                        this.mesh.scale.y = this.maxScale;
+                    }
+    
+                    // Life decays, affecting opacity
+                    this.life -= this.decay * delta;
+                    this.mesh.material.opacity = this.life;
+    
+                    // Return whether alive
+                    return this.life > 0;
+                };
+    
+                // Manage all generated flame objects
+                const flameCylinders = [];
+    
+                // Spawn (emit) a new flame
+                function spawnFlameCylinder() {
+                    const flame = new FlameCylinder();
+    
+                    // Make the flame mesh a child of the spaceship
+                    spaceship.add(flame.mesh);
+    
+                    // Place the flame in the spaceship's local coordinate system at the specified engine position
+                    flame.mesh.position.copy(enginePosition);
+    
+                    flameCylinders.push(flame);
+                }
+    
+                // Update all flames
+                function updateFlames(delta) {
+                    for (let i = flameCylinders.length - 1; i >= 0; i--) {
+                        const flame = flameCylinders[i];
+                        if (!flame.update(delta)) {
+                            // Once a flame is "dead," remove it from the spaceship
+                            spaceship.remove(flame.mesh);
+                            flameCylinders.splice(i, 1);
+                        }
+                    }
+                }
+    
+                return {
+                    spawn: spawnFlameCylinder,
+                    update: updateFlames
+                };
+            }
+    
             const loader = new THREE.GLTFLoader();
             loader.load(
-                'scene.gltf', // 替换为您的模型路径和文件名
+                'scene.gltf', // Replace with your model path and filename
                 (gltf) => {
                     spaceship = gltf.scene;
-                    spaceship.position.set(0, 0, -50); // 将飞船放置在相机前方 50 个单位的位置
-                    spaceship.rotation.y = Math.PI; // 旋转 180 度，使其面向远离相机的方向
-                    spaceship.scale.setScalar(0.015); // 根据需要调整缩放比例
+                    spaceship.position.set(0, 0, -50);
+                    spaceship.rotation.y = Math.PI;
+                    spaceship.scale.setScalar(0.015);
                     scene.add(spaceship);
+                    const shipLight = new THREE.PointLight(0xffffff, 2, 50);
+                    spaceship.add(shipLight);
+                    shipLight.position.set(0, 2, 0);
+    
+                    // ---------- Define the local positions of the two thrusters ----------
+                    // If the spaceship faces -Z, the flame is in the -Z direction
+                    const enginePositionLeft = new THREE.Vector3(-4, 2, -10);
+                    const enginePositionRight = new THREE.Vector3(4, 2, -10);
+    
+                    // Create two local flame managers
+                    flameEffectLeft  = createFlameEffect(scene, spaceship, enginePositionLeft);
+                    flameEffectRight = createFlameEffect(scene, spaceship, enginePositionRight);
                 },
                 (xhr) => {
                     console.log(`${(xhr.loaded / xhr.total * 100).toFixed(2)}% loaded`);
                 },
                 (error) => {
-                    console.error('加载 glTF 模型时出错:', error);
+                    console.error('Error loading glTF model:', error);
                 }
             );
-
-
-            // 键盘控制
-            const keys = { w: false, a: false, s: false, d: false };
+    
+            // Keyboard controls
+            const keys = { w: false, a: false, s: false, d: false, shift: false }; // Added 'shift' key
             window.addEventListener('keydown', (e) => {
                 const key = e.key.toLowerCase();
                 if (keys.hasOwnProperty(key)) keys[key] = true;
@@ -376,19 +718,24 @@
                 const key = e.key.toLowerCase();
                 if (keys.hasOwnProperty(key)) keys[key] = false;
             });
-
-            // 控制飞船移动
+            
+            // Control spaceship movement & emit flames
             function updateSpaceship() {
                 if (!spaceship) return;
-                const speed = 0.2;
+                const baseSpeed = 0.2; // Original speed
                 const direction = new THREE.Vector3();
                 spaceship.getWorldDirection(direction);
-
+    
+                // Store position before movement
+                const previousPosition = spaceship.position.clone();
+    
+                // Update spaceship position and rotation according to pressed keys
                 if (keys['s']) {
-                    spaceship.position.add(direction.clone().multiplyScalar(-speed)); // 向后移动
+                    spaceship.position.add(direction.clone().multiplyScalar(-baseSpeed)); // Backward
                 }
                 if (keys['w']) {
-                    spaceship.position.add(direction.clone().multiplyScalar(speed)); // 向前移动
+                    const wSpeed = keys['shift'] ? 3 : baseSpeed; // Increase speed if shift is pressed
+                    spaceship.position.add(direction.clone().multiplyScalar(wSpeed));  // Forward
                 }
                 if (keys['d']) {
                     spaceship.rotation.y -= 0.05;
@@ -396,23 +743,42 @@
                 if (keys['a']) {
                     spaceship.rotation.y += 0.05;
                 }
+    
+                // Collision detection: if the spaceship collides with any planet or the sun, revert to previous position
+                if (isColliding(spaceship.position)) {
+                    spaceship.position.copy(previousPosition);
+                }
+    
+                // Whenever moving forward or backward, spawn flames on both thrusters
+                if ((keys['w'] || keys['s'])) {
+                    flameEffectLeft?.spawn();
+                    flameEffectRight?.spawn();
+                }
             }
-
-            // 调整窗口大小
+    
+            // Listen to window size changes
             window.addEventListener('resize', () => {
                 camera.aspect = window.innerWidth / window.innerHeight;
                 camera.updateProjectionMatrix();
                 renderer.setSize(window.innerWidth, window.innerHeight);
             });
-
-            // 添加辅助控件（可选，调试用，完成后可移除）
-            // const controls = new THREE.OrbitControls(camera, renderer.domElement);
-
-            // 动画循环
+    
+            // Global clock
+            const clock = new THREE.Clock();
+    
+            // ================== 6. Define camera offsets and distance scaling ==================
+            const baseCameraOffset = new THREE.Vector3(0, 25, -50); // Original camera offset (Behind the spaceship)
+    
+            let currentCameraDistanceFactor = 1.0; // Current scaling factor
+            const minCameraDistanceFactor = 0.5;    // Minimum scaling factor when moving (half distance)
+            const cameraDistanceLerpSpeed = 2.0;    // Speed of scaling factor transition
+    
+            // Animation loop
             function animate() {
                 requestAnimationFrame(animate);
-
-                // 更新行星位置
+                const delta = clock.getDelta();
+    
+                // Update planet positions
                 planets.forEach((planet) => {
                     planet.userData.angle += planet.userData.speed;
                     planet.position.set(
@@ -421,32 +787,68 @@
                         Math.sin(planet.userData.angle) * planet.userData.distance
                     );
                 });
-
-                // 更新月球公转
-                moon.userData.angle += moon.userData.speed; // 更新公转角度
+    
+                // Update moon
+                moon.userData.angle += moon.userData.speed;
                 moon.position.set(
                     Math.cos(moon.userData.angle) * moon.userData.distance,
                     0,
                     Math.sin(moon.userData.angle) * moon.userData.distance
                 );
-
-                // 更新飞船位置
+    
+                // Update comet
+                updateComet(comet);
+    
+                // Update spaceship
                 updateSpaceship();
-
+    
+                // If both flame effects are created, update them
+                flameEffectLeft?.update(delta);
+                flameEffectRight?.update(delta);
+    
+                // Update meteor positions and rotations
+                meteors.forEach((meteor) => {
+                    // Slow movement
+                    meteor.position.add(meteor.userData.velocity.clone().multiplyScalar(delta));
+    
+                    // Slow rotation
+                    meteor.rotation.x += 0.1 * delta;
+                    meteor.rotation.y += 0.1 * delta;
+                });
+    
+                // ================== 7. Update camera position based on movement ==================
                 if (spaceship) {
-                    // 调整相机的相对偏移量
-                    const relativeCameraOffset = new THREE.Vector3(0, 50, -100); // 更大的偏移量
-                    const cameraOffset = relativeCameraOffset.applyMatrix4(spaceship.matrixWorld);
-                    camera.position.lerp(cameraOffset, 0.05);
+                    // Determine if the spaceship is moving
+                    const isMoving = keys['w'] || keys['s'];
+    
+                    // Determine target distance factor
+                    const targetFactor = isMoving ? minCameraDistanceFactor : 1.0;
+    
+                    // Smoothly interpolate the current distance factor towards the target
+                    currentCameraDistanceFactor += (targetFactor - currentCameraDistanceFactor) * delta * cameraDistanceLerpSpeed;
+    
+                    // Clamp the factor between min and max
+                    currentCameraDistanceFactor = THREE.MathUtils.clamp(currentCameraDistanceFactor, minCameraDistanceFactor, 1.0);
+    
+                    // Compute the desired camera offset based on the current scaling factor
+                    const desiredOffset = baseCameraOffset.clone().multiplyScalar(currentCameraDistanceFactor);
+    
+                    // Apply the spaceship's world matrix to the desired offset to get world position
+                    const cameraOffset = desiredOffset.applyMatrix4(spaceship.matrixWorld);
+    
+                    // Smoothly interpolate the camera position to the target offset
+                    camera.position.lerp(cameraOffset, 0.1); // Adjust the lerp factor for desired smoothness
+    
+                    // Make the camera look at the spaceship
                     camera.lookAt(spaceship.position);
                 }
-
-                // 更新彗星位置
-                updateComet(comet);
-
+    
                 renderer.render(scene, camera);
             }
             animate();
+    
+            // Optionally create more "nebulae"
+            createAsterism(2000, 0, -2000);
         });
     </script>
 </body>
