@@ -5,14 +5,6 @@ Please use Visual Studio Code, install the Live Server extension, and use the Fi
 
 The group from the Advanced Course in Computer Graphics at Waseda University collaboratively developed the project. 
 
-The team division of work is as follows:
-
-YU YUANYONG: Responsible for embedding the spaceship model and putting together the scene, functionality debugging, model feature error fixing(Spaceship model clipping issues, key bindings, camera position adjustments), and project testing.
-
-CHEN MEIZE: Responsible for spaceship model creation, starry background, and primary feature coding such as spaceship exhaust flames, meteors, and collision detection.
-
-MASAYA TAKABE and Riku Nakashima are responsible for planet modeling and some details of the starry background(Milky Way background).
-
 Spaceship model referenced by https://www.fab.com/listings/14265e80-7cc8-4238-873c-8b970f44f552
 
 Since the other team members do not have GitHub accounts, the project source code is hosted on this GitHub account.
