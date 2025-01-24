@@ -6,6 +6,8 @@ Please use Visual Studio Code, install the Live Server extension, and use the Fi
 The group from the Advanced Course in Computer Graphics at Waseda University collaboratively developed the project. 
 
 Spaceship model referenced by https://www.fab.com/listings/14265e80-7cc8-4238-873c-8b970f44f552
+Planet texture referenced by https://planetpixelemporium.com/planets.html
+Ring referenced by https://liginc.co.jp/357018
 
 Since the other team members do not have GitHub accounts, the project source code is hosted on this GitHub account.
 Thanks to all team members for their hard work and dedication. 
