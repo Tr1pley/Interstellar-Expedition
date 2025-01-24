@@ -5,6 +5,7 @@ Please use Visual Studio Code, install the Live Server extension, and use the Fi
 
 The group from the Advanced Course in Computer Graphics at Waseda University collaboratively developed the project. 
 
+## Acknowledgments
 Spaceship model referenced by https://www.fab.com/listings/14265e80-7cc8-4238-873c-8b970f44f552
 Planet texture referenced by https://planetpixelemporium.com/planets.html
 Ring referenced by https://liginc.co.jp/357018
